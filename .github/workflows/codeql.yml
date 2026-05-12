@@ -1,0 +1,55 @@
+# .github/workflows/codeql.yml
+#
+# CodeQL static analysis workflow.
+#
+# Forensic value: produces continuously-updated, time-stamped records
+# of known vulnerabilities in source code, stored in the repository's
+# Security tab. If an incident occurs, investigators can answer:
+# "was this vulnerability detectable before the incident, and when?"
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main, "devsecops/**"]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday 07:00 UTC — catches newly-published CodeQL rules
+    - cron: '0 7 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze JavaScript/TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['javascript-typescript']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        # github/codeql-action/init v3.26.7 pinned to commit SHA
+        uses: github/codeql-action/init@4fa2a7953630fd2f3fb380f21be14ede0169dd4f
+        with:
+          languages: ${{ matrix.language }}
+          config-file: ./.github/codeql-config.yml
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@4fa2a7953630fd2f3fb380f21be14ede0169dd4f
+        with:
+          category: "/language:${{ matrix.language }}"
