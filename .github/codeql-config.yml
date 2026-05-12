@@ -12,17 +12,13 @@ queries:
   - uses: security-and-quality
   - uses: security-extended
 
-paths:
-  - web-app/app
-  - web-app/components
-  - web-app/lib
-  - web-app/pages
-
 paths-ignore:
   - "**/node_modules"
   - "**/.next"
   - "**/dist"
   - "**/build"
+  - "**/out"
+  - "**/coverage"
   - "**/*.test.js"
   - "**/*.test.ts"
   - "**/*.test.tsx"
