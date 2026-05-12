@@ -5,8 +5,6 @@
 #   2. Generates a Software Bill of Materials (Syft)
 #   3. Signs the artifact AND the SBOM via Sigstore (keyless)
 #   4. Publishes everything to a GitHub Release
-#
-# Triggers only on git tags (v*) or manual dispatch.
 
 name: Release
 
@@ -19,10 +17,6 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: web-app
-
 jobs:
   build-and-sign:
     name: Build, SBOM, Sign, Release
@@ -30,7 +24,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write   # create GitHub Release
-      id-token: write   # OIDC → Sigstore Fulcio
+      id-token: write   # OIDC -> Sigstore Fulcio
 
     steps:
       - name: Checkout repository
@@ -41,7 +35,6 @@ jobs:
 
       - name: Determine release tag
         id: tag
-        working-directory: .
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="v0.0.0-test-$(date +%Y%m%d-%H%M%S)"
@@ -59,9 +52,11 @@ jobs:
           cache-dependency-path: web-app/package-lock.json
 
       - name: Install dependencies
+        working-directory: web-app
         run: npm ci
 
       - name: Build
+        working-directory: web-app
         env:
           GITHUB_TOKEN: "ci-build-placeholder-not-a-real-token"
           GITHUB_OWNER: "ci-build-placeholder"
@@ -71,49 +66,42 @@ jobs:
         run: npm run build
 
       - name: Package build output
-        working-directory: .
         run: |
           tar --exclude='./cache' -czf next-build.tar.gz -C web-app/.next .
           ls -lh next-build.tar.gz
 
       - name: Compute artifact hash
         id: hash
-        working-directory: .
         run: |
           HASH=$(sha256sum next-build.tar.gz | cut -d' ' -f1)
           echo "artifact_hash=${HASH}" >> "$GITHUB_OUTPUT"
           echo "Artifact SHA-256: ${HASH}"
 
-      # ─── SBOM ────────────────────────────────────────────
+      # SBOM generation
       - name: Generate SBOM
-        working-directory: .
         uses: anchore/sbom-action@v0
         with:
-          path: web-app
+          path: ./web-app
           format: spdx-json
           output-file: sbom.spdx.json
 
-      # ─── SIGNING (cosign keyless) ────────────────────────
+      # Signing
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Sign artifact
-        working-directory: .
+      - name: Sign artifact (keyless via OIDC)
         run: |
           cosign sign-blob --yes \
             --bundle next-build.tar.gz.cosign.bundle \
             next-build.tar.gz
 
-      - name: Sign SBOM
-        working-directory: .
+      - name: Sign SBOM (keyless via OIDC)
         run: |
           cosign sign-blob --yes \
             --bundle sbom.spdx.json.cosign.bundle \
             sbom.spdx.json
 
-      # ─── RELEASE ─────────────────────────────────────────
       - name: Create GitHub Release
-        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
@@ -154,7 +142,6 @@ jobs:
             sbom.spdx.json.cosign.bundle
 
       - name: Summary
-        working-directory: .
         env:
           RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
           ARTIFACT_HASH: ${{ steps.hash.outputs.artifact_hash }}
