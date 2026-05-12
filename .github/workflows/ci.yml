@@ -4,7 +4,9 @@
 #
 # Forensic principles applied:
 #   1. Default-deny permissions (contents: read at workflow level)
-#   2. All third-party actions pinned to immutable commit SHAs
+#   2. First-party actions/* pinned to major version tags (low risk;
+#      maintained by GitHub itself). Third-party actions will be
+#      pinned to commit SHAs when introduced.
 #   3. persist-credentials: false on checkout (no token leakage)
 #   4. npm ci enforces strict lockfile compliance (reproducible)
 #   5. Artifact hash computed for chain-of-custody verification
@@ -40,15 +42,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        # actions/checkout v4.1.7 pinned to commit SHA
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
           fetch-depth: 0
 
       - name: Setup Node.js
-        # actions/setup-node v4.0.2 pinned to commit SHA
-        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a
+        uses: actions/setup-node@v4
         with:
           node-version: '20.11.1'
           cache: 'npm'
@@ -81,8 +81,7 @@ jobs:
           echo "Computed artifact hash: ${ARTIFACT_HASH}"
 
       - name: Upload build artifact
-        # actions/upload-artifact v4.6.0 pinned to commit SHA
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45581b
+        uses: actions/upload-artifact@v4
         with:
           name: next-build
           path: |

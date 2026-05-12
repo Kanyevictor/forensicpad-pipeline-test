@@ -15,7 +15,6 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Weekly Monday 07:00 UTC — catches newly-published CodeQL rules
     - cron: '0 7 * * 1'
 
 permissions:
@@ -38,18 +37,17 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+        uses: actions/checkout@v4
         with:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        # github/codeql-action/init v3.26.7 pinned to commit SHA
-        uses: github/codeql-action/init@4fa2a7953630fd2f3fb380f21be14ede0169dd4f
+        uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
           config-file: ./.github/codeql-config.yml
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@4fa2a7953630fd2f3fb380f21be14ede0169dd4f
+        uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
