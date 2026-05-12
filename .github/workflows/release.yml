@@ -1,23 +1,20 @@
 # .github/workflows/release.yml
 #
 # Forensic-grade release workflow:
-#   1. Builds the Next.js application reproducibly
-#   2. Generates a Software Bill of Materials (SBOM) in SPDX format
-#   3. Signs the build artifact AND the SBOM via Sigstore (keyless)
+#   1. Builds the Next.js application
+#   2. Generates a Software Bill of Materials (Syft)
+#   3. Signs the artifact AND the SBOM via Sigstore (keyless)
 #   4. Publishes everything to a GitHub Release
 #
-# The signature certificate's identity is bound to this workflow,
-# meaning anyone can verify that a given artifact was built by
-# this specific repo at this specific commit. The chain of custody
-# is cryptographic, public, and tamper-evident (via Rekor).
+# Triggers only on git tags (v*) or manual dispatch.
 
 name: Release
 
 on:
   push:
     tags:
-      - 'v*'        # e.g., v0.1.0, v1.0.0-rc.1
-  workflow_dispatch:  # also allow manual trigger for testing
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -32,12 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write   # needed to create GitHub Release
-      id-token: write   # needed for OIDC → Sigstore Fulcio
-
-    outputs:
-      artifact_hash: ${{ steps.hash.outputs.artifact_hash }}
-      release_tag:   ${{ steps.tag.outputs.release_tag }}
+      contents: write   # create GitHub Release
+      id-token: write   # OIDC → Sigstore Fulcio
 
     steps:
       - name: Checkout repository
@@ -48,6 +41,7 @@ jobs:
 
       - name: Determine release tag
         id: tag
+        working-directory: .
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="v0.0.0-test-$(date +%Y%m%d-%H%M%S)"
@@ -56,7 +50,6 @@ jobs:
           fi
           echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Building release: ${TAG}"
-        working-directory: .
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -65,7 +58,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web-app/package-lock.json
 
-      - name: Install dependencies (lockfile-strict)
+      - name: Install dependencies
         run: npm ci
 
       - name: Build
@@ -78,89 +71,69 @@ jobs:
         run: npm run build
 
       - name: Package build output
-        id: pack
+        working-directory: .
         run: |
-          # Tar the .next directory (excluding cache for determinism)
-          tar --exclude='./cache' -czf next-build.tar.gz -C .next .
+          tar --exclude='./cache' -czf next-build.tar.gz -C web-app/.next .
           ls -lh next-build.tar.gz
-          mv next-build.tar.gz ../next-build.tar.gz
-        working-directory: web-app
 
-      - name: Compute artifact hash (for signing subject)
+      - name: Compute artifact hash
         id: hash
+        working-directory: .
         run: |
           HASH=$(sha256sum next-build.tar.gz | cut -d' ' -f1)
           echo "artifact_hash=${HASH}" >> "$GITHUB_OUTPUT"
           echo "Artifact SHA-256: ${HASH}"
+
+      # ─── SBOM ────────────────────────────────────────────
+      - name: Generate SBOM
         working-directory: .
+        uses: anchore/sbom-action@v0
+        with:
+          path: web-app
+          format: spdx-json
+          output-file: sbom.spdx.json
 
-      # ─── SBOM GENERATION (Syft) ─────────────────────────────────
-      - name: Install Syft
-        uses: anchore/sbom-action/download-syft@v0
-
-      - name: Generate SBOM (SPDX JSON)
-        run: |
-          syft scan dir:web-app -o spdx-json=sbom.spdx.json
-          echo "SBOM generated:"
-          jq '.spdxVersion, .name, (.packages | length)' sbom.spdx.json
-        working-directory: .
-
-      # ─── SIGNING (cosign keyless via Sigstore) ──────────────────
+      # ─── SIGNING (cosign keyless) ────────────────────────
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
-        with:
-          cosign-release: 'v2.4.1'
 
-      - name: Sign artifact (keyless via OIDC)
-        env:
-          COSIGN_EXPERIMENTAL: "1"
+      - name: Sign artifact
+        working-directory: .
         run: |
-          cosign sign-blob \
-            --yes \
+          cosign sign-blob --yes \
             --bundle next-build.tar.gz.cosign.bundle \
             next-build.tar.gz
-          echo "Artifact signed. Bundle:"
-          ls -lh next-build.tar.gz.cosign.bundle
-        working-directory: .
 
-      - name: Sign SBOM (keyless via OIDC)
-        env:
-          COSIGN_EXPERIMENTAL: "1"
+      - name: Sign SBOM
+        working-directory: .
         run: |
-          cosign sign-blob \
-            --yes \
+          cosign sign-blob --yes \
             --bundle sbom.spdx.json.cosign.bundle \
             sbom.spdx.json
-          echo "SBOM signed."
-        working-directory: .
 
-      # ─── PUBLISH GITHUB RELEASE ─────────────────────────────────
+      # ─── RELEASE ─────────────────────────────────────────
       - name: Create GitHub Release
+        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
           ARTIFACT_HASH: ${{ steps.hash.outputs.artifact_hash }}
         run: |
-          # Build release notes describing what's in the release
           cat > release-notes.md <<NOTES
-          ## ForensicPad Pipeline Test Release
+          ## ForensicPad Release
 
           **Tag:** ${RELEASE_TAG}
           **Commit:** ${GITHUB_SHA}
           **Workflow run:** ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-
-          ### Artifact
-          - File: \`next-build.tar.gz\`
-          - SHA-256: \`${ARTIFACT_HASH}\`
+          **Artifact SHA-256:** \`${ARTIFACT_HASH}\`
 
           ### Forensic Attestations
-          - \`sbom.spdx.json\` — Software Bill of Materials (SPDX 2.3 JSON)
-          - \`next-build.tar.gz.cosign.bundle\` — Sigstore signature bundle
-          - \`sbom.spdx.json.cosign.bundle\` — SBOM signature bundle
+          - \`next-build.tar.gz\` — deterministic build output
+          - \`sbom.spdx.json\` — Software Bill of Materials (SPDX 2.3)
+          - \`next-build.tar.gz.cosign.bundle\` — Sigstore signature
+          - \`sbom.spdx.json.cosign.bundle\` — SBOM signature
 
-          ### Verification
-
-          To verify the artifact signature:
+          ### Verify
 
           \`\`\`bash
           cosign verify-blob \\
@@ -169,12 +142,8 @@ jobs:
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \\
             next-build.tar.gz
           \`\`\`
-
-          Successful verification proves the artifact was produced by
-          this exact repository's release workflow.
           NOTES
 
-          # Create the release
           gh release create "${RELEASE_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${RELEASE_TAG}" \
@@ -183,24 +152,17 @@ jobs:
             sbom.spdx.json \
             next-build.tar.gz.cosign.bundle \
             sbom.spdx.json.cosign.bundle
-        working-directory: .
 
-      # ─── SUMMARY ────────────────────────────────────────────────
       - name: Summary
+        working-directory: .
         env:
           RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
           ARTIFACT_HASH: ${{ steps.hash.outputs.artifact_hash }}
         run: |
           {
-            echo "## Release ${RELEASE_TAG} — published"
+            echo "## Release ${RELEASE_TAG} published"
             echo ""
-            echo "**Artifact hash:** \`${ARTIFACT_HASH}\`"
+            echo "**SHA-256:** \`${ARTIFACT_HASH}\`"
             echo ""
-            echo "**Forensic chain of custody:**"
-            echo "1. Source: commit \`${GITHUB_SHA}\`"
-            echo "2. Build: workflow run [\`${GITHUB_RUN_ID}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
-            echo "3. SBOM: attached to release as \`sbom.spdx.json\`"
-            echo "4. Signature: in Sigstore Rekor (public log)"
-            echo "5. Release: [\`${RELEASE_TAG}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG})"
+            echo "[View release](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG})"
           } >> "$GITHUB_STEP_SUMMARY"
-        working-directory: .
